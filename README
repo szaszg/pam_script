@@ -3,6 +3,8 @@ README
 PAM-script has been written by Jeroen Nijhof <jeroen@jeroennijhof.nl>
 with packaging and some modifications by R.K. Owen <rkowen@nersc.gov>.
 
+This fork add two new option to easily implement MFA with PAM (eg. with sshd).
+
 Description:
 	PAM-script allows you to execute scripts during authorization,
 	passwd changes, or session opening or closing.
@@ -15,6 +17,10 @@ Options to pam_script.so:
 	or execute the various pam-scripts.  The default is 'fail'.
 
 	dir=/some/path - where to find the pam-scripts listed below.
+
+	prompt=[some prompt for show to user] - instead of "Password: "
+
+	askpass - pam_script ask password (again) even there is one in the "cache"
 
 	All options are passed on to the script commandlines and those not
 	intercepted by PAM may be used to modify the script behavior.

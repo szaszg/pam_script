@@ -301,6 +301,44 @@ static int pam_script_exec(pam_handle_t *pamh,
 	return PAM_SUCCESS;
 }
 
+static char *get_prompt(int argc, const char **argv) {
+
+	int	i;
+	static char	prm[BUFSIZE] = { '\0' };
+
+	/* check for pam.conf options */
+	for (i = 0; i < argc; i++) {
+		if (strncmp(argv[i],"prompt=",7) == 0) {
+			const char *new_prmpt = argv[i] + 7;
+			const int MAX_PRMPT_LEN = BUFSIZE - 2;
+
+			if (*new_prmpt) { /* got new scriptdir */
+				if (snprintf(prm, MAX_PRMPT_LEN, "%s", new_prmpt) > MAX_PRMPT_LEN) {
+					pam_script_syslog(LOG_ERR,"script prompt %s exceeds maximum supported length", new_prmpt);
+					prm[0] = '\0';
+				}
+			}
+		}
+	}
+	if (prm[0] == '\0') {
+		strncpy(prm, "Password: ", BUFSIZE - 1);
+	}
+	return prm;
+}
+
+static int need_ask_pass(int argc, const char **argv) {
+
+	int	i;
+
+	/* check for pam.conf options */
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i],"askpass") == 0) {
+			return 1;
+		}
+	}
+	return 0;
+}
+
 static int pam_script_converse(pam_handle_t *pamh, int argc,
 	struct pam_message **message, struct pam_response **response)
 {
@@ -389,8 +427,8 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc,
 	*/
 	pam_get_item(pamh, PAM_AUTHTOK, (void*) &password);
 
-	if (!password) {
-		retval = pam_script_set_authtok(pamh, flags, argc, argv, "Password: ", PAM_AUTHTOK);
+	if (need_ask_pass(argc, argv) || !password) {
+		retval = pam_script_set_authtok(pamh, flags, argc, argv, get_prompt(argc, argv), PAM_AUTHTOK);
 		if (retval != PAM_SUCCESS)
 			return retval;
 	}

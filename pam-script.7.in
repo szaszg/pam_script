@@ -20,7 +20,7 @@ pam-script \- a PAM module that can invoke scripts within the PAM stack.
 
 .SH SYNOPSIS
 .B pam-script.so
-.RI [ onerr=(success|fail) ][ dir=/some/path/ ]
+.RI [ onerr=(success|fail) ][ prompt=otherprompt ][ askpass ][ dir=/some/path/ ]
 
 .SH DESCRIPTION
 .B pam-script
@@ -49,6 +49,11 @@ A summary of options is included below.
 .B onerr=(success|fail)
 the default behavior if the module can not find or execute the script.
 The default is to fail if the option is not given.
+.TP
+.B askpass
+force pam_script to ask password at auth step even password asked before
+.TP
+.B prompt=otherprompt
 .TP
 .B dir=/some/path/
 where to find the pam-scripts to invoke for each of the various
