@@ -19,8 +19,10 @@ Options to pam_script.so:
 	dir=/some/path - where to find the pam-scripts listed below.
 
 	prompt=[some prompt for show to user] - instead of "Password: "
+	(auth only - at pam_sm_authenticate)
 
-	askpass - pam_script ask password (again) even there is one in the "cache"
+	askpass=(force|none) - pam_script forced to ask password, or does
+	not ask password even if authtok is empty
 
 	All options are passed on to the script commandlines and those not
 	intercepted by PAM may be used to modify the script behavior.
