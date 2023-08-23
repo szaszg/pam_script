@@ -5,17 +5,12 @@ modified modul we can do more flexible things.
 
 The configuration:
 
-[Client] --ssh--> [Server] --> [PAM/pam_script] --> [custom script]
-    +------ssh--> [      ] --> [PAM/pam_script]                |
-    |                                v                         v
-    |                      [custom script]-->Ok/Fail    e-mail or SMS
-    |                                                          |
-    +-  .  .  ~   ~   ~ .  . ~   ~   ~ .  .  ~   ~   ~ .  .   -+
+[Client] <==ssh==> [Server] <---> [PAM/pam_script] <---> [custom script]
 
 In this example we use:
  - a public key auth
  - next a password auth
- - and a one time password auth
+ - and a one time password auth (OTP)
 
 We use a second ssh daemon for this on TCP port 22022, so we need a second service:
 In /usr/local/lib/systemd/system we create a unit file: ssh-mfa.service (copy from
@@ -26,12 +21,12 @@ Description=OpenBSD Secure Shell server MFA
 #PAM /etc/pam.d/sshd-mfa
 Documentation=man:sshd(8) man:sshd_config(5)
 After=network.target auditd.service
-ConditionPathExists=!/etc/ssh/sshd-mfa_not_to_be_run
+ConditionPathExists=!/srv/sshd-mfa/sshd-mfa_not_to_be_run
 
 [Service]
 EnvironmentFile=-/etc/default/ssh-mfa
 ExecStartPre=/usr/local/sbin/sshd-mfa -t
-ExecStart=/usr/local/sbin/sshd-mfa -f /etc/ssh/sshd-mfa_config -D $SSHD_MFA_OPTS
+ExecStart=/usr/local/sbin/sshd-mfa -f /srv//sshd-mfa/sshd/sshd_config -D $SSHD_MFA_OPTS
 ExecReload=/usr/local/sbin/sshd-mfa -t
 ExecReload=/bin/kill -HUP $MAINPID
 KillMode=process
@@ -54,7 +49,7 @@ Port 22022
 ...
 PubkeyAuthentication yes
 ...
-AuthorizedKeysFile    /srv/sshd-mfa/pubkeys/%u-authorized_keys
+AuthorizedKeysFile    /srv/sshd-mfa/users/%u/authorized_keys
 ...
 PasswordAuthentication no
 ...
@@ -66,20 +61,22 @@ PidFile /var/run/sshd-mfa.pid
 ...
 AuthenticationMethods publickey,keyboard-interactive
 ForceCommand /srv/sshd-mfa/scripts/usermenu
+Include /srv/sshd-mfa/sshd/users/*
 -------------
 
 So:
-  - port is port :)
-  - pubkeyauth for pubkey
-  - authorizedkeyfile: we store the pubkeys in /srv/sshd-mfa/pubkeys/ dir
-    the file name is [username]-authorized_keys
-  - passwordauth - some ssh magic
+  - Port is port :)
+  - PubkeyAuthentication for pubkey auth (1st factor)
+  - AuthorizedKeyFile: we store the pubkeys in /srv/sshd-mfa/users/{user}/ dir
+    the file name is authorized_keys
+  - PasswordAuthentication no - some ssh magic
   - ChallengeResponseAuthentication yes - this is needed for PAM
-  - usepam - of course
+  - UsePam yes - of course
   - a separated pid file from the "original" sshd service
-  - authmethods - this made first pubkey and password (and PAM ask again next)
-  - forcecommand - a script (user cannot get console, only a "dialog" form in order to
-    change password/e-mail address if want to...)
+  - AuthenticationMethods - this made first pubkey and next call PAM
+  - ForceCommand - a script (user cannot get console, only a "dialog" form in order to
+       change their password/e-mail address
+  - Include - include all user config file (beginning with Match User {user})
 
 We need a separate executable for this sshd (/usr/local/sbin/sshd-mfa) because PAM
 use executable name to filter rules. We symlink the original sshd:
@@ -87,67 +84,84 @@ use executable name to filter rules. We symlink the original sshd:
 
 Now we add a custom PAM rules file /etc/pam.d/sshd-mfa
 ------------
-auth       required     pam_script.so passwd [prompt=Pass: ]         dir=/srv/sshd-mfa/scripts
-auth       required     pam_script.so OTP    [prompt=OTP: ]  askpass dir=/srv/sshd-mfa/scripts
+auth       [success=1 default=ignore]  pam_script.so reqpass            askpass=none  dir=/srv/sshd-mfa/scripts
+auth       required                    pam_script.so passwd [prompt=PASS: ]           dir=/srv/sshd-mfa/scripts
+
+auth       [success=2 default=ignore]  pam_script.so reqotp             askpass=none  dir=/srv/sshd-mfa/scripts
+auth       required                    pam_script.so sendotp            askpass=none  dir=/srv/sshd-mfa/scripts
+auth       required                    pam_script.so OTP [prompt=OTP: ] askpass=force dir=/srv/sshd-mfa/scripts
+
+auth       required                    pam_permit.so
 -----------
 
 So:
-  - auth - is auth :)
-  - required - if fail the step, PAM do all others, but auth failed
-  - pam_script.so - :)
-  - passwd - the script (/srv/sshd-mfa/scripts/pam_script_auth) get all argument, so $1=passwd
-  - [prompt=Pass: ] - the new argument, now pam_script prompt Pass:_ instead of Password:_
-  - dir=... - where to find the script
-This is the first pass, pam_script ask a password (from ssh) and the script generate an OTP and
-send to the user.
+  first auth line - our script checks that: our user needs to authenticate by password. If not PAM skip the next
+                    auth line (success=1). pam_script.so does not ask password (askpass=none)
+  second auth line - our script ask a password with prompt is "PASS: " (pam_script.so ask password as usual)
+  next auth line - our script checks that: our user needs to authenticate with OTP. If not PAM skip the next two
+                    auth line (success=2). pam_script.so does not ask password (askpass=none)
+  next auth line - our script generate and send an OTP: pam_script.so does not ask password (askpass=none)
+  next auth line - our script ask a password with prompt is "OTP: ". pam_script.so forced to ask a password
+                    (askpass=force))
+  next auth line - just permit login if our user does not need to auth with password nor OTP
 
-The next line similar but:
-  - [prompt=... ] - now the user see: OTP:_
-  - askpass - pam_script ask password even it is in the "cache" (yes it is in the cache, because
-              the previouse step pam_script ask a password).
+pam_script.so for all line run our bash script: /srv/sshd-mfa/scripts/pam_script_auth with all arguments, so
+$1 is becomes reqpass, passwd, reqotp, sendotp and OTP in turn
+
 The script:
 ------------
 #!/bin/bash
-#
-# $1 = passwd -> ask password and generate OTP return OK!
-# $1 = OTP -> ask otp and return BAD if pass check or OTP check failes
-#
+
 xDIR=/srv/sshd-mfa
-OFLE=$xDIR/otpass/${PAM_USER:-nobody}
-PFLE=$xDIR/passwd/${PAM_USER:-nobody}
-AFLE=$xDIR/addres/${PAM_USER:-nobody}
+DIR=$xDIR/users/${PAM_USER:-nobody}
 
-test -z "$PAM_USER" && exit 1
+test -z "$PAM_USER" && exit 6
 
-if test "$1" = "passwd"
+no_pass_required=
+no_otp_required=
+test -r $DIR/authenv && source $DIR/authenv
+
+if test "$1" = "reqpass"
 then
-  echo -n x >$OFLE #if password match fail...
+  test "$no_pass_required" = yes_no_pass_required && exit 0
+  exit 25
+elif test "$1" = "reqotp"
+then
+  test "$no_otp_required" = yes_no_otp_required && exit 0
+  exit 25
+elif test "$1" = "passwd"
+then
 #check pass
-  if test "$(echo "$PAM_AUTHTOK" | sha384sum)" = "$(cat "$PFLE")"
+  if test "$(echo "$PAM_AUTHTOK" | sha384sum)" = "$(< $DIR/passwd)"
   then
-      echo -n >$OFLE
+      exit 0
   fi
+  exit 7
+elif test "$1" = "sendotp"
+then
 #generate OTP
-  OTP=$(head -c 3 /dev/urandom | xxd  -g0 -c6 -ps | tee $OFLE)
-  echo "To: $(< $AFLE)
-Subject: OVSZ AUTH OTP for $PAM_USER
+  OTP=$(head -c 3 /dev/urandom | xxd  -g0 -c6 -ps | tee $DIR/otpass) && \
+  echo "To: $(< $DIR/email)
+Subject: OTP for $PAM_USER
 
 $OTP
-" | sendmail -f ovszit@ovsz.hu -t
+" |sendmail -f noreplay@email.addr.ess -t
   exit 0
 elif test "$1" = "OTP"
 then
-    if test -r $OFLE && ! grep -q x $OFLE && test "$PAM_AUTHTOK" = "$(< $OFLE)"
-    then
-        rm $OFLE
-        exit 0
-    else
-        rm -f $OFLE
-        exit 1
-    fi
+  test -r $DIR/otpass && ! grep -q x $DIR/otpass && test "$PAM_AUTHTOK" = "$(< $DIR/otpass)"
+  ec=$?
+  rm $DIR/otpass
+  exit $((ec*7))
 fi
 
-exit 1
+exit 7
 --------------
 
-This is so easy (now) :)
+Oh, one more!
+
+We need a user in the system (cannot use ssh with virtual users):
+ > useradd -K UID_MIN=20000 -g 20000 -M -d /tmp -s /bin/bash -c "My user,,,," {user}
+this line adds a new user {user}, uid is minimum 20000 into group 20000, does not create
+home dir (/tmp) shell is bash...
+

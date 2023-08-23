@@ -326,14 +326,25 @@ static char *get_prompt(int argc, const char **argv) {
 	return prm;
 }
 
-static int need_ask_pass(int argc, const char **argv) {
+/* return:
+  0 - ask as default
+  1 - ask forced
+  2 - ask omitted */
+static int ask_pass(int argc, const char **argv) {
 
 	int	i;
 
 	/* check for pam.conf options */
 	for (i = 0; i < argc; i++) {
-		if (strcmp(argv[i],"askpass") == 0) {
-			return 1;
+		if (strncmp(argv[i],"askpass=",8) == 0) {
+			if (strcmp(argv[i],"askpass=default") == 0)
+				return 0;
+			if (strcmp(argv[i],"askpass=force") == 0)
+				return 1;
+			if (strcmp(argv[i],"askpass=none") == 0)
+				return 2;
+			pam_script_syslog(LOG_ERR,
+					"invalid option: %s", argv[i]);
 		}
 	}
 	return 0;
@@ -427,7 +438,7 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc,
 	*/
 	pam_get_item(pamh, PAM_AUTHTOK, (void*) &password);
 
-	if (need_ask_pass(argc, argv) || !password) {
+	if ((!(retval = ask_pass(argc, argv)) && !password) || retval == 1) {
 		retval = pam_script_set_authtok(pamh, flags, argc, argv, get_prompt(argc, argv), PAM_AUTHTOK);
 		if (retval != PAM_SUCCESS)
 			return retval;
